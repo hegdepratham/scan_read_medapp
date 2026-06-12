@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Medicine Identifier</title>
+<style>
+body { font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px; }
+button { padding: 10px 20px; font-size: 16px; margin: 10px; cursor: pointer; }
+#result { padding: 15px; background: #e8f5e9; border-radius: 8px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<h1>Medicine Identifier</h1>
+<video id="camera" width="400" height="300" autoplay></video><br>
+<button onclick="captureImage()">Take Picture</button>
+<button onclick="speakResult()">Speak Dosage</button>
+<div id="result" style="display:none;">
+<h3 id="medicineName"></h3>
+<p id="dosage"></p>
+<p id="warnings"></p>
+</div>
+<script src="https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+[
+{ "name": "Metformin", "dosage": "500mg, twice daily after meals", "warnings": ["Take with water", "Avoid empty stomach"] },
+{ "name": "Aspirin", "dosage": "325mg, once or twice daily", "warnings": ["Take after food", "Max 3 tablets per day"] },
+{ "name": "Paracetamol", "dosage": "500mg every 4-6 hours as needed", "warnings": ["Max 4 tablets per day", "No alcohol"] },
+{ "name": "Amlodipine", "dosage": "5mg once daily", "warnings": ["Take regularly", "May cause dizziness"] },
+{ "name": "Atenolol", "dosage": "50mg once in the morning", "warnings": ["Take with food", "Monitor heart rate"] }
+]
