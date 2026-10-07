@@ -2,18 +2,81 @@ let medicines = [];
 let recognizedMedicine = null;
 let lastOCRResult = null;
 
+// Bundled medicines data as fallback for CORS issues on hosted sites
+const FALLBACK_MEDICINES = [
+  {
+    id: "MED001",
+    name: "Paracetamol",
+    brand_names: ["Crocin", "Calpol"],
+    aliases: ["acetaminophen", "paracetamol"],
+    strengths: ["500 mg", "650 mg"],
+    dosage: "As directed by a qualified healthcare professional.",
+    warnings: ["Do not exceed the recommended dose.", "Check other medicines for paracetamol content."]
+  },
+  {
+    id: "MED002",
+    name: "Cetirizine",
+    brand_names: ["Cetirizine"],
+    aliases: ["cetirizine hydrochloride", "cetirizine hcl"],
+    strengths: ["5 mg", "10 mg"],
+    dosage: "As directed by a qualified healthcare professional.",
+    warnings: ["May cause drowsiness.", "Avoid activities requiring alertness if affected."]
+  },
+  {
+    id: "MED003",
+    name: "Aspirin",
+    brand_names: ["Disprin"],
+    aliases: ["acetylsalicylic acid", "asa"],
+    strengths: ["75 mg", "150 mg", "300 mg"],
+    dosage: "As directed by a qualified healthcare professional.",
+    warnings: ["May increase bleeding risk.", "Use only as directed."]
+  },
+  {
+    id: "MED004",
+    name: "Metformin",
+    brand_names: ["Glucophage"],
+    aliases: ["metformin hydrochloride", "metformin hcl"],
+    strengths: ["500 mg", "850 mg", "1000 mg"],
+    dosage: "As directed by a qualified healthcare professional.",
+    warnings: ["Take only according to prescribed instructions.", "Report unusual or severe symptoms to a healthcare professional."]
+  },
+  {
+    id: "MED005",
+    name: "Amlodipine",
+    brand_names: ["Norvasc"],
+    aliases: ["amlodipine besylate"],
+    strengths: ["2.5 mg", "5 mg", "10 mg"],
+    dosage: "As directed by a qualified healthcare professional.",
+    warnings: ["Take only according to prescribed instructions.", "Do not change the dose without medical advice."]
+  }
+];
+
+// Check if running on HTTPS or localhost
+function isSecureContext() {
+  return window.location.protocol === "https:" || 
+         window.location.hostname === "localhost" || 
+         window.location.hostname === "127.0.0.1";
+}
+
 // -----------------------------
 // Database
 // -----------------------------
 
 async function loadMedicines() {
-  const res = await fetch("medicines.json");
+  try {
+    const res = await fetch("medicines.json", { mode: "same-origin" });
 
-  if (!res.ok) {
-    throw new Error("Could not load medicines.json");
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: Could not load medicines.json`);
+    }
+
+    medicines = await res.json();
+    console.info("✓ Loaded medicines from medicines.json");
+    return;
+  } catch (error) {
+    console.warn("⚠ medicines.json load failed (using bundled fallback):", error.message);
+    medicines = FALLBACK_MEDICINES;
   }
-
-  medicines = await res.json();
 }
 
 // -----------------------------
@@ -22,6 +85,23 @@ async function loadMedicines() {
 
 async function initCamera() {
   const video = document.getElementById("camera");
+
+  if (!video) {
+    console.error("Camera element not found in DOM");
+    return;
+  }
+
+  // Check browser support
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showStatus("❌ Camera access not supported in this browser.");
+    return;
+  }
+
+  // Check secure context
+  if (!isSecureContext()) {
+    showStatus("❌ Camera requires HTTPS. Please access via HTTPS or use localhost.");
+    return;
+  }
 
   try {
     // First try to explicitly request the rear/environment camera
@@ -56,13 +136,18 @@ async function initCamera() {
     video.srcObject = stream;
     await video.play();
 
-    showStatus("Camera ready.");
+    showStatus("📷 Camera ready.");
 
   } catch (error) {
     console.error("Camera error:", error);
-    showStatus(
-      "Camera access failed. Please allow camera permission."
-    );
+    
+    if (error.name === "NotAllowedError") {
+      showStatus("❌ Camera permission denied. Please allow camera access.");
+    } else if (error.name === "NotFoundError") {
+      showStatus("❌ No camera found on this device.");
+    } else {
+      showStatus("❌ Camera access failed: " + error.message);
+    }
   }
 }
 
@@ -171,61 +256,61 @@ async function performOCR(imageUrl) {
   ctx.putImageData(imageData, 0, 0);
 
   const enhancedImage = canvas.toDataURL("image/png");
-// Create a crop of the upper part of the image
-const cropCanvas = document.createElement("canvas");
+  // Create a crop of the upper part of the image
+  const cropCanvas = document.createElement("canvas");
 
-cropCanvas.width = canvas.width;
-cropCanvas.height = Math.floor(canvas.height * 0.45);
+  cropCanvas.width = canvas.width;
+  cropCanvas.height = Math.floor(canvas.height * 0.45);
 
-const cropCtx = cropCanvas.getContext("2d");
+  const cropCtx = cropCanvas.getContext("2d");
 
-cropCtx.drawImage(
-  canvas,
-  0,
-  0,
-  canvas.width,
-  cropCanvas.height,
-  0,
-  0,
-  cropCanvas.width,
-  cropCanvas.height
-);
+  cropCtx.drawImage(
+    canvas,
+    0,
+    0,
+    canvas.width,
+    cropCanvas.height,
+    0,
+    0,
+    cropCanvas.width,
+    cropCanvas.height
+  );
 
-const croppedImage = cropCanvas.toDataURL("image/png");
+  const croppedImage = cropCanvas.toDataURL("image/png");
 
-console.log("CROPPED OCR IMAGE:", croppedImage);
+  console.log("CROPPED OCR IMAGE:", croppedImage);
   const passes = [
-  {
-    name: "Original / Block",
-    image: imageUrl,
-    mode: 6
-  },
-  {
-    name: "Original / Sparse",
-    image: imageUrl,
-    mode: 11
-  },
-  {
-    name: "Enhanced / Block",
-    image: enhancedImage,
-    mode: 6
-  },
-  {
-    name: "Enhanced / Sparse",
-    image: enhancedImage,
-    mode: 11
-  },
-  {
-    name: "Cropped / Block",
-    image: croppedImage,
-    mode: 6
-  },
-  {
-    name: "Cropped / Sparse",
-    image: croppedImage,
-    mode: 11
-  }
-];
+    {
+      name: "Original / Block",
+      image: imageUrl,
+      mode: 6
+    },
+    {
+      name: "Original / Sparse",
+      image: imageUrl,
+      mode: 11
+    },
+    {
+      name: "Enhanced / Block",
+      image: enhancedImage,
+      mode: 6
+    },
+    {
+      name: "Enhanced / Sparse",
+      image: enhancedImage,
+      mode: 11
+    },
+    {
+      name: "Cropped / Block",
+      image: croppedImage,
+      mode: 6
+    },
+    {
+      name: "Cropped / Sparse",
+      image: croppedImage,
+      mode: 11
+    }
+  ];
 
   const results = [];
 
@@ -664,13 +749,13 @@ function findMedicine(text, ocrConfidence) {
 async function captureImage() {
   const video = document.getElementById("camera");
 
-  if (!video.videoWidth || !video.videoHeight) {
-    showStatus("Camera is not ready yet.");
+  if (!video || !video.videoWidth || !video.videoHeight) {
+    showStatus("📹 Camera is not ready yet. Try again in a moment.");
     return;
   }
 
   try {
-    showStatus("Capturing image...");
+    showStatus("📸 Capturing image...");
 
     const imageUrl = preprocessImage(video);
 
@@ -692,7 +777,7 @@ async function captureImage() {
 
   } catch (error) {
     console.error("Scan failed:", error);
-    showStatus("Scan failed. Please try again.");
+    showStatus("❌ Scan failed. Please try again.");
   }
 }
 
@@ -703,39 +788,47 @@ async function captureImage() {
 function displayRecognitionResult(result, ocr) {
   const container = document.getElementById("result");
 
+  if (!container) {
+    console.error("Result container not found in DOM");
+    return;
+  }
+
   container.style.display = "block";
+
+  const medicineNameEl = document.getElementById("medicineName");
+  const dosageEl = document.getElementById("dosage");
+  const warningsEl = document.getElementById("warnings");
+
+  if (!medicineNameEl || !dosageEl || !warningsEl) {
+    console.error("Result elements not found in DOM");
+    return;
+  }
 
   if (!result.recognized) {
     recognizedMedicine = null;
 
-    document.getElementById("medicineName").innerText =
-      "Medicine not confidently identified";
+    medicineNameEl.innerText = "Medicine not confidently identified";
+    dosageEl.innerText = `OCR confidence: ${Math.round(ocr.confidence)}%`;
+    warningsEl.innerText = formatFailureReason(result);
 
-    document.getElementById("dosage").innerText =
-      `OCR confidence: ${Math.round(ocr.confidence)}%`;
-
-    document.getElementById("warnings").innerText =
-      formatFailureReason(result);
-
-    showStatus("Scan completed — verification required.");
+    showStatus("✓ Scan completed — verification required.");
     return;
   }
 
   recognizedMedicine = result.medicine;
 
-  document.getElementById("medicineName").innerText =
-    result.medicine.name;
+  medicineNameEl.innerText = result.medicine.name;
 
-  document.getElementById("dosage").innerText =
+  dosageEl.innerText =
     `Confidence: ${Math.round(result.confidence * 100)}%` +
     (result.detectedStrength
       ? ` | Strength: ${result.detectedStrength}`
       : "");
 
-  document.getElementById("warnings").innerText =
+  warningsEl.innerText =
     `Warnings: ${result.medicine.warnings.join(", ")}`;
 
-  showStatus("Medicine identified.");
+  showStatus("✓ Medicine identified.");
 }
 
 function formatFailureReason(result) {
@@ -765,6 +858,10 @@ function showStatus(message) {
   if (!status) {
     status = document.createElement("p");
     status.id = "scan-status";
+    status.style.marginTop = "10px";
+    status.style.padding = "10px";
+    status.style.borderRadius = "4px";
+    status.style.backgroundColor = "#f0f0f0";
     document.body.appendChild(status);
   }
 
@@ -817,18 +914,25 @@ speechSynthesis.onvoiceschanged = () =>
 
 window.addEventListener("load", async () => {
   try {
+    // Check environment
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    console.log(`🌐 App loaded on ${protocol}//${hostname}`);
+
+    if (!isSecureContext()) {
+      showStatus("⚠️  App works best on HTTPS. Camera may not be available on HTTP.");
+    }
+
     await loadMedicines();
     await initCamera();
-    showStatus("Ready to scan.");
+    showStatus("✓ Ready to scan.");
   } catch (error) {
-    console.error(error);
-    showStatus("Application initialization failed.");
+    console.error("Initialization failed:", error);
+    showStatus("❌ Application initialization failed. Check console for details.");
   }
 });
-// -----------------------------
-// Uploaded image OCR
-// -----------------------------
 
+// Uploaded image OCR
 async function scanUploadedImage() {
   const input = document.getElementById("imageUpload");
 
@@ -849,18 +953,18 @@ async function scanUploadedImage() {
 
     const imageUrl = URL.createObjectURL(file);
 
-console.log("UPLOADED FILE:", file.name);
-console.log("FILE TYPE:", file.type);
-console.log("FILE SIZE:", file.size);
+    console.log("UPLOADED FILE:", file.name);
+    console.log("FILE TYPE:", file.type);
+    console.log("FILE SIZE:", file.size);
 
-const preview = document.getElementById("ocrPreview");
+    const preview = document.getElementById("ocrPreview");
 
-if (preview) {
-  preview.src = imageUrl;
-  preview.style.display = "block";
-}
+    if (preview) {
+      preview.src = imageUrl;
+      preview.style.display = "block";
+    }
 
-const ocr = await performOCR(imageUrl);
+    const ocr = await performOCR(imageUrl);
 
     URL.revokeObjectURL(imageUrl);
 
