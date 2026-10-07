@@ -2,7 +2,7 @@ let medicines = [];
 let recognizedMedicine = null;
 let lastOCRResult = null;
 
-// Bundled medicines data as fallback for CORS issues on hosted sites
+// Bundled medicines data as fallback
 const FALLBACK_MEDICINES = [
   {
     id: "MED001",
@@ -51,17 +51,44 @@ const FALLBACK_MEDICINES = [
   }
 ];
 
-// Check if running on HTTPS or localhost
 function isSecureContext() {
   return window.location.protocol === "https:" || 
          window.location.hostname === "localhost" || 
          window.location.hostname === "127.0.0.1";
 }
 
-// -----------------------------
-// Database
-// -----------------------------
+// Initialize Tesseract once
+let tesseractReady = false;
+let tesseractWorker = null;
 
+async function initTesseract() {
+  if (tesseractReady) return;
+  
+  try {
+    showStatus("⏳ Loading OCR engine (this may take 30-60 seconds on first use)...");
+    console.log("Initializing Tesseract worker...");
+    
+    tesseractWorker = await Tesseract.createWorker();
+    await tesseractWorker.loadLanguage("eng");
+    await tesseractWorker.initialize("eng");
+    
+    tesseractReady = true;
+    console.info("✓ Tesseract OCR engine ready");
+    showStatus("✓ OCR engine loaded. Ready to scan.");
+  } catch (error) {
+    console.error("Failed to initialize Tesseract:", error);
+    showStatus("⚠️ OCR engine failed to load. Text recognition may not work.");
+  }
+}
+
+// Clean up worker on page unload
+window.addEventListener("beforeunload", async () => {
+  if (tesseractWorker) {
+    await tesseractWorker.terminate();
+  }
+});
+
+// Database
 async function loadMedicines() {
   try {
     const res = await fetch("medicines.json", { mode: "same-origin" });
@@ -79,10 +106,7 @@ async function loadMedicines() {
   }
 }
 
-// -----------------------------
 // Camera
-// -----------------------------
-
 async function initCamera() {
   const video = document.getElementById("camera");
 
@@ -91,20 +115,17 @@ async function initCamera() {
     return;
   }
 
-  // Check browser support
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     showStatus("❌ Camera access not supported in this browser.");
     return;
   }
 
-  // Check secure context
   if (!isSecureContext()) {
     showStatus("❌ Camera requires HTTPS. Please access via HTTPS or use localhost.");
     return;
   }
 
   try {
-    // First try to explicitly request the rear/environment camera
     let stream;
 
     try {
@@ -117,12 +138,8 @@ async function initCamera() {
         audio: false
       });
     } catch (rearCameraError) {
-      console.warn(
-        "Rear camera request failed. Trying default camera.",
-        rearCameraError
-      );
+      console.warn("Rear camera request failed. Trying default camera.", rearCameraError);
 
-      // Fallback for browsers that don't support exact camera selection
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "environment",
@@ -135,7 +152,6 @@ async function initCamera() {
 
     video.srcObject = stream;
     await video.play();
-
     showStatus("📷 Camera ready.");
 
   } catch (error) {
@@ -151,10 +167,7 @@ async function initCamera() {
   }
 }
 
-// -----------------------------
-// Image preprocessing
-// -----------------------------
-
+// Image preprocessing - optimized for medicine labels
 function preprocessImage(video) {
   const canvas = document.createElement("canvas");
 
@@ -165,25 +178,21 @@ function preprocessImage(video) {
   canvas.height = height;
 
   const ctx = canvas.getContext("2d");
-
   ctx.drawImage(video, 0, 0, width, height);
 
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
 
-  // Convert image to grayscale and increase contrast.
+  // Enhanced grayscale + aggressive contrast for text
   for (let i = 0; i < data.length; i += 4) {
     const r = data[i];
     const g = data[i + 1];
     const b = data[i + 2];
 
-    let gray =
-      0.299 * r +
-      0.587 * g +
-      0.114 * b;
+    let gray = 0.299 * r + 0.587 * g + 0.114 * b;
 
-    // Simple contrast enhancement
-    gray = ((gray - 128) * 1.35) + 128;
+    // More aggressive contrast (2.0 instead of 1.35)
+    gray = ((gray - 128) * 2.0) + 128;
     gray = Math.max(0, Math.min(255, gray));
 
     data[i] = gray;
@@ -192,195 +201,40 @@ function preprocessImage(video) {
   }
 
   ctx.putImageData(imageData, 0, 0);
-
   return canvas.toDataURL("image/png");
 }
 
-// -----------------------------
-// OCR
-// -----------------------------
-
+// Optimized OCR - faster with fewer passes
 async function performOCR(imageUrl) {
-  showStatus("Preparing image for OCR...");
-
-  const image = new Image();
-
-  await new Promise((resolve, reject) => {
-    image.onload = resolve;
-    image.onerror = reject;
-    image.src = imageUrl;
-  });
-
-  // Create an enlarged grayscale/high-contrast version
-  const canvas = document.createElement("canvas");
-  const scale = 1.5;
-
-  canvas.width = image.width * scale;
-  canvas.height = image.height * scale;
-
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-
-  ctx.drawImage(
-    image,
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
-
-  const imageData = ctx.getImageData(
-    0,
-    0,
-    canvas.width,
-    canvas.height
-  );
-
-  const data = imageData.data;
-
-  // Grayscale + contrast enhancement
-  for (let i = 0; i < data.length; i += 4) {
-    const gray =
-      0.299 * data[i] +
-      0.587 * data[i + 1] +
-      0.114 * data[i + 2];
-
-    // Increase contrast around the midpoint
-    const contrast = ((gray - 128) * 1.5) + 128;
-    const value = Math.max(0, Math.min(255, contrast));
-
-    data[i] = value;
-    data[i + 1] = value;
-    data[i + 2] = value;
+  if (!tesseractReady || !tesseractWorker) {
+    showStatus("⚠️ OCR engine not ready. Initializing...");
+    await initTesseract();
   }
 
-  ctx.putImageData(imageData, 0, 0);
-
-  const enhancedImage = canvas.toDataURL("image/png");
-  // Create a crop of the upper part of the image
-  const cropCanvas = document.createElement("canvas");
-
-  cropCanvas.width = canvas.width;
-  cropCanvas.height = Math.floor(canvas.height * 0.45);
-
-  const cropCtx = cropCanvas.getContext("2d");
-
-  cropCtx.drawImage(
-    canvas,
-    0,
-    0,
-    canvas.width,
-    cropCanvas.height,
-    0,
-    0,
-    cropCanvas.width,
-    cropCanvas.height
-  );
-
-  const croppedImage = cropCanvas.toDataURL("image/png");
-
-  console.log("CROPPED OCR IMAGE:", croppedImage);
-  const passes = [
-    {
-      name: "Original / Block",
-      image: imageUrl,
-      mode: 6
-    },
-    {
-      name: "Original / Sparse",
-      image: imageUrl,
-      mode: 11
-    },
-    {
-      name: "Enhanced / Block",
-      image: enhancedImage,
-      mode: 6
-    },
-    {
-      name: "Enhanced / Sparse",
-      image: enhancedImage,
-      mode: 11
-    },
-    {
-      name: "Cropped / Block",
-      image: croppedImage,
-      mode: 6
-    },
-    {
-      name: "Cropped / Sparse",
-      image: croppedImage,
-      mode: 11
-    }
-  ];
-
-  const results = [];
-
-  for (const pass of passes) {
-    showStatus(`Reading text... (${pass.name})`);
-
-    try {
-      const result = await Tesseract.recognize(
-        pass.image,
-        "eng",
-        {
-          logger: message => {
-            if (message.status === "recognizing text") {
-              const progress = Math.round(
-                (message.progress || 0) * 100
-              );
-
-              showStatus(
-                `Reading text... ${progress}% (${pass.name})`
-              );
-            }
-          },
-
-          // Tesseract page segmentation mode
-          tessedit_pageseg_mode: pass.mode
-        }
-      );
-
-      results.push({
-        name: pass.name,
-        text: result.data.text || "",
-        confidence: result.data.confidence || 0
-      });
-
-      console.log(
-        `[OCR ${pass.name}]`,
-        result.data.text,
-        "Confidence:",
-        result.data.confidence
-      );
-
-    } catch (error) {
-      console.warn(`OCR pass failed: ${pass.name}`, error);
-    }
+  if (!tesseractReady) {
+    return { text: "", confidence: 0 };
   }
 
-  if (results.length === 0) {
-    return {
-      text: "",
-      confidence: 0
-    };
+  try {
+    showStatus("🔍 Reading text from image...");
+
+    // Use worker directly - much faster than old method
+    const result = await tesseractWorker.recognize(imageUrl);
+
+    const text = result.data.text || "";
+    const confidence = result.data.confidence || 0;
+
+    console.log("OCR Result:", { text: text.substring(0, 100), confidence });
+
+    return { text, confidence };
+  } catch (error) {
+    console.error("OCR error:", error);
+    showStatus("❌ Text reading failed: " + error.message);
+    return { text: "", confidence: 0 };
   }
-
-  // Pick the highest-confidence OCR result
-  results.sort((a, b) => b.confidence - a.confidence);
-
-  const best = results[0];
-
-  console.log("BEST OCR RESULT:", best);
-
-  return {
-    text: best.text,
-    confidence: best.confidence
-  };
 }
 
-// -----------------------------
 // Text normalization
-// -----------------------------
-
 function normalizeText(text) {
   return text
     .toLowerCase()
@@ -390,9 +244,6 @@ function normalizeText(text) {
     .trim();
 }
 
-// Common OCR substitutions.
-// We don't blindly replace everything because that can
-// create false medicine names.
 function normalizeOCRWord(word) {
   const replacements = {
     "paracetmol": "paracetamol",
@@ -402,7 +253,11 @@ function normalizeOCRWord(word) {
     "aspirn": "aspirin",
     "metformn": "metformin",
     "amlodipne": "amlodipine",
-    "atenol1": "atenolol"
+    "atenol1": "atenolol",
+    "crocin": "paracetamol",
+    "calpol": "paracetamol",
+    "disprin": "aspirin",
+    "glucophage": "metformin"
   };
 
   return replacements[word] || word;
@@ -415,10 +270,7 @@ function normalizedWords(text) {
     .map(normalizeOCRWord);
 }
 
-// -----------------------------
-// String similarity
-// -----------------------------
-
+// Levenshtein distance
 function levenshtein(a, b) {
   const matrix = [];
 
@@ -458,53 +310,32 @@ function similarity(a, b) {
   return 1 - distance / maxLength;
 }
 
-// -----------------------------
 // Medicine matching
-// -----------------------------
-
 function extractStrength(text, medicine = null) {
   if (!text || !text.trim()) {
     return null;
   }
 
-  // --------------------------------------------------
-  // If we know the medicine, first search specifically
-  // for one of its known strengths.
-  // --------------------------------------------------
-
   if (medicine && Array.isArray(medicine.strengths)) {
-
     for (const strength of medicine.strengths) {
       const strengthText = String(strength).toLowerCase();
-
-      // Extract the numeric part, e.g. "650" from "650 mg"
-      const numberMatch = strengthText.match(
-        /(\d+(?:\.\d+)?)/
-      );
+      const numberMatch = strengthText.match(/(\d+(?:\.\d+)?)/);
 
       if (!numberMatch) {
         continue;
       }
 
       const number = numberMatch[1];
-
-      // Search for the number followed by a likely OCR version
-      // of the unit: mg, mi, mcg, g, etc.
       const pattern = new RegExp(
         `\\b${number}\\s*(mg|mi|mcg|g|ml|%|iu)\\b`,
         "i"
       );
 
       if (pattern.test(text)) {
-        // Return the database's known/correct strength
         return strength;
       }
     }
   }
-
-  // --------------------------------------------------
-  // Fallback: find any strength-like value in OCR text
-  // --------------------------------------------------
 
   const matches = [
     ...text.matchAll(
@@ -533,19 +364,14 @@ function scoreMedicine(medicine, text, ocrConfidence) {
 
   for (const candidate of candidates) {
     const candidateWords = normalizedWords(candidate);
-
-    // Exact phrase
     const normalizedCandidate = candidateWords.join(" ");
 
-    if (
-      normalizeText(text).includes(normalizedCandidate)
-    ) {
+    if (normalizeText(text).includes(normalizedCandidate)) {
       bestNameScore = Math.max(bestNameScore, 1);
       matchedTerm = candidate;
       continue;
     }
 
-    // Compare individual OCR words to medicine name/aliases.
     for (const candidateWord of candidateWords) {
       for (const word of words) {
         const score = similarity(word, candidateWord);
@@ -558,9 +384,7 @@ function scoreMedicine(medicine, text, ocrConfidence) {
     }
   }
 
-  // Strength matching
   const detectedStrength = extractStrength(text);
-
   let strengthScore = 0;
 
   if (
@@ -573,17 +397,9 @@ function scoreMedicine(medicine, text, ocrConfidence) {
     strengthScore = 1;
   }
 
-  // OCR confidence is already 0-100.
   const normalizedOCRConfidence =
     Math.max(0, Math.min(100, ocrConfidence)) / 100;
 
-  /*
-    Weighted confidence:
-
-    60% medicine-name similarity
-    20% OCR confidence
-    20% strength match
-  */
   const finalScore =
     (bestNameScore * 0.60) +
     (normalizedOCRConfidence * 0.20) +
@@ -604,16 +420,12 @@ function findMedicine(text, ocrConfidence) {
   if (!text.trim()) {
     return {
       recognized: false,
-      reason: "NO_TEXT"
+      reason: "NO_TEXT",
+      feedback: "No text detected. Make sure the medicine label is clearly visible."
     };
   }
 
   const normalizedOCR = normalizeText(text);
-
-  // --------------------------------------------------
-  // First: look for an exact known medicine term
-  // --------------------------------------------------
-
   const exactMatches = [];
 
   for (const medicine of medicines) {
@@ -630,7 +442,6 @@ function findMedicine(text, ocrConfidence) {
         continue;
       }
 
-      // Match complete words/phrases rather than partial words.
       const pattern = new RegExp(
         `(^|\\s)${normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s|$)`,
         "i"
@@ -649,29 +460,13 @@ function findMedicine(text, ocrConfidence) {
     }
   }
 
-  // --------------------------------------------------
-  // If we found a strong exact medicine term,
-  // use it even if overall OCR confidence is low.
-  // --------------------------------------------------
-
   if (exactMatches.length > 0) {
     exactMatches.sort((a, b) => b.score - a.score);
 
     const bestExact = exactMatches[0];
+    const detectedStrength = extractStrength(text, bestExact.medicine);
 
-    const detectedStrength = extractStrength(
-      text,
-      bestExact.medicine
-    );
-
-    console.log(
-      "EXACT MEDICINE MATCH:",
-      bestExact.medicine.name,
-      "Matched term:",
-      bestExact.matchedTerm,
-      "OCR confidence:",
-      ocrConfidence
-    );
+    console.log("EXACT MATCH:", bestExact.medicine.name);
 
     return {
       recognized: true,
@@ -684,14 +479,8 @@ function findMedicine(text, ocrConfidence) {
     };
   }
 
-  // --------------------------------------------------
-  // Otherwise use the normal fuzzy scoring system
-  // --------------------------------------------------
-
   const results = medicines
-    .map(medicine =>
-      scoreMedicine(medicine, text, ocrConfidence)
-    )
+    .map(medicine => scoreMedicine(medicine, text, ocrConfidence))
     .sort((a, b) => b.score - a.score);
 
   const best = results[0];
@@ -704,11 +493,10 @@ function findMedicine(text, ocrConfidence) {
     };
   }
 
-  const MIN_CONFIDENCE = 0.72;
+  // LOWERED threshold from 0.72 to 0.50 for better recognition
+  const MIN_CONFIDENCE = 0.50;
 
-  const ambiguous =
-    second &&
-    (best.score - second.score) < 0.08;
+  const ambiguous = second && (best.score - second.score) < 0.08;
 
   if (best.score < MIN_CONFIDENCE) {
     return {
@@ -717,7 +505,8 @@ function findMedicine(text, ocrConfidence) {
       candidates: results.slice(0, 3).map(r => ({
         name: r.medicine.name,
         confidence: Number(r.score.toFixed(2))
-      }))
+      })),
+      feedback: `Best match: ${best.medicine.name} (${Math.round(best.score * 100)}%). Try focusing the camera better.`
     };
   }
 
@@ -742,10 +531,7 @@ function findMedicine(text, ocrConfidence) {
   };
 }
 
-// -----------------------------
 // Main scan function
-// -----------------------------
-
 async function captureImage() {
   const video = document.getElementById("camera");
 
@@ -755,21 +541,17 @@ async function captureImage() {
   }
 
   try {
-    showStatus("📸 Capturing image...");
+    showStatus("📸 Capturing and reading image...");
 
     const imageUrl = preprocessImage(video);
-
     const ocr = await performOCR(imageUrl);
 
     lastOCRResult = ocr;
 
-    console.log("OCR TEXT:", ocr.text);
+    console.log("OCR TEXT:", ocr.text.substring(0, 200));
     console.log("OCR CONFIDENCE:", ocr.confidence);
 
-    const result = findMedicine(
-      ocr.text,
-      ocr.confidence
-    );
+    const result = findMedicine(ocr.text, ocr.confidence);
 
     console.log("MEDICINE RESULT:", result);
 
@@ -777,14 +559,11 @@ async function captureImage() {
 
   } catch (error) {
     console.error("Scan failed:", error);
-    showStatus("❌ Scan failed. Please try again.");
+    showStatus("❌ Scan failed: " + error.message);
   }
 }
 
-// -----------------------------
-// Results
-// -----------------------------
-
+// Display results
 function displayRecognitionResult(result, ocr) {
   const container = document.getElementById("result");
 
@@ -807,11 +586,14 @@ function displayRecognitionResult(result, ocr) {
   if (!result.recognized) {
     recognizedMedicine = null;
 
-    medicineNameEl.innerText = "Medicine not confidently identified";
-    dosageEl.innerText = `OCR confidence: ${Math.round(ocr.confidence)}%`;
-    warningsEl.innerText = formatFailureReason(result);
+    medicineNameEl.innerText = result.candidates 
+      ? `${result.candidates[0].name} (${Math.round(result.candidates[0].confidence * 100)}%)?`
+      : "Medicine not identified";
+    
+    dosageEl.innerText = `OCR: ${Math.round(ocr.confidence)}%`;
+    warningsEl.innerText = result.feedback || formatFailureReason(result);
 
-    showStatus("✓ Scan completed — verification required.");
+    showStatus("⚠️ Could not confidently identify. Try repositioning.");
     return;
   }
 
@@ -821,34 +603,23 @@ function displayRecognitionResult(result, ocr) {
 
   dosageEl.innerText =
     `Confidence: ${Math.round(result.confidence * 100)}%` +
-    (result.detectedStrength
-      ? ` | Strength: ${result.detectedStrength}`
-      : "");
+    (result.detectedStrength ? ` | Strength: ${result.detectedStrength}` : "");
 
-  warningsEl.innerText =
-    `Warnings: ${result.medicine.warnings.join(", ")}`;
+  warningsEl.innerText = `Warnings: ${result.medicine.warnings.join(", ")}`;
 
-  showStatus("✓ Medicine identified.");
+  showStatus("✓ Medicine identified!");
 }
 
 function formatFailureReason(result) {
   switch (result.reason) {
     case "NO_TEXT":
-      return "No readable text was detected.";
-
+      return "No readable text detected. Make sure the label is clear and well-lit.";
     case "LOW_CONFIDENCE":
-      return "The detected text did not match a known medicine with sufficient confidence.";
-
+      return "Text detected but confidence is low. Try a clearer angle.";
     case "AMBIGUOUS_MATCH":
-      return (
-        "Multiple possible medicines were detected. " +
-        result.candidates
-          .map(c => `${c.name} (${Math.round(c.confidence * 100)}%)`)
-          .join(", ")
-      );
-
+      return "Multiple possible matches. Please try again with better focus.";
     default:
-      return "Medicine could not be identified.";
+      return "Medicine could not be identified. Check the label is visible.";
   }
 }
 
@@ -868,10 +639,7 @@ function showStatus(message) {
   status.innerText = message;
 }
 
-// -----------------------------
 // Voice
-// -----------------------------
-
 function speakResult() {
   if (!recognizedMedicine) {
     alert("No medicine has been confidently identified.");
@@ -883,11 +651,9 @@ function speakResult() {
     `Dosage information: ${recognizedMedicine.dosage}. ` +
     `Warnings: ${recognizedMedicine.warnings.join(". ")}.`;
 
-  const utterance =
-    new SpeechSynthesisUtterance(message);
+  const utterance = new SpeechSynthesisUtterance(message);
 
   const voices = speechSynthesis.getVoices();
-
   const targetLanguage = "kn";
 
   const matchingVoice = voices.find(
@@ -908,27 +674,23 @@ function speakResult() {
 speechSynthesis.onvoiceschanged = () =>
   speechSynthesis.getVoices();
 
-// -----------------------------
-// Start application
-// -----------------------------
-
+// Startup
 window.addEventListener("load", async () => {
   try {
-    // Check environment
     const protocol = window.location.protocol;
     const hostname = window.location.hostname;
     console.log(`🌐 App loaded on ${protocol}//${hostname}`);
 
     if (!isSecureContext()) {
-      showStatus("⚠️  App works best on HTTPS. Camera may not be available on HTTP.");
+      showStatus("⚠️ App works best on HTTPS. Camera may not be available.");
     }
 
     await loadMedicines();
     await initCamera();
-    showStatus("✓ Ready to scan.");
+    await initTesseract();
   } catch (error) {
     console.error("Initialization failed:", error);
-    showStatus("❌ Application initialization failed. Check console for details.");
+    showStatus("❌ Initialization failed. See console for details.");
   }
 });
 
@@ -953,9 +715,7 @@ async function scanUploadedImage() {
 
     const imageUrl = URL.createObjectURL(file);
 
-    console.log("UPLOADED FILE:", file.name);
-    console.log("FILE TYPE:", file.type);
-    console.log("FILE SIZE:", file.size);
+    console.log("UPLOADED FILE:", file.name, file.size, "bytes");
 
     const preview = document.getElementById("ocrPreview");
 
@@ -970,20 +730,12 @@ async function scanUploadedImage() {
 
     lastOCRResult = ocr;
 
-    console.log("OCR TEXT:", ocr.text);
-    console.log("OCR CONFIDENCE:", ocr.confidence);
-
-    const result = findMedicine(
-      ocr.text,
-      ocr.confidence
-    );
-
-    console.log("MEDICINE RESULT:", result);
+    const result = findMedicine(ocr.text, ocr.confidence);
 
     displayRecognitionResult(result, ocr);
 
   } catch (error) {
     console.error("Uploaded image OCR failed:", error);
-    showStatus("Could not read the image.");
+    showStatus("❌ Could not read the image: " + error.message);
   }
 }
