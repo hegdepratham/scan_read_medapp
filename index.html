@@ -1,24 +1,142 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<title>Medicine Identifier</title>
-<style>
-body { font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px; }
-button { padding: 10px 20px; font-size: 16px; margin: 10px; cursor: pointer; }
-#result { padding: 15px; background: #e8f5e9; border-radius: 8px; margin-top: 20px; }
-</style>
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>OCR Medicine Recognition</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+    }
+
+    video {
+      width: 100%;
+      max-height: 500px;
+      object-fit: contain;
+      background: #111;
+    }
+
+    button {
+      padding: 10px 16px;
+      margin: 10px 5px 10px 0;
+      cursor: pointer;
+    }
+
+    #scan-status {
+      font-size: 14px;
+      color: #555;
+    }
+
+    #result {
+      display: none;
+      margin-top: 25px;
+      padding: 16px;
+      border: 1px solid #ccc;
+    }
+
+    .field {
+      margin: 10px 0;
+    }
+
+    .label {
+      font-weight: bold;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #f5f5f5;
+      padding: 12px;
+    }
+  </style>
 </head>
+
 <body>
-<h1>Medicine Identifier</h1>
-<video id="camera" width="400" height="300" autoplay></video><br>
-<button onclick="captureImage()">Take Picture</button>
-<button onclick="speakResult()">Speak Dosage</button>
-<div id="result" style="display:none;">
-<h3 id="medicineName"></h3>
-<p id="dosage"></p>
-<p id="warnings"></p>
-</div>
-<script src="https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js"></script>
-<script src="app.js"></script>
+
+  <h2>OCR Medicine Recognition</h2>
+
+  <video
+    id="camera"
+    autoplay
+    playsinline
+  ></video>
+
+  <div>
+    <button onclick="captureImage()">
+      Scan
+    </button>
+
+    <button onclick="speakResult()">
+      Read Result
+    </button>
+  </div>
+
+  <p id="scan-status">
+    Initializing...
+  </p>
+
+  <section id="result">
+
+    <div class="field">
+      <span class="label">Detected Medicine:</span>
+      <span id="medicineName">—</span>
+    </div>
+
+    <div class="field">
+      <span class="label">Confidence:</span>
+      <span id="dosage">—</span>
+    </div>
+
+    <div class="field">
+      <span class="label">Information:</span>
+      <span id="warnings">—</span>
+    </div>
+
+    <div class="field">
+      <span class="label">Raw OCR:</span>
+
+      <pre id="ocrText">—</pre>
+    </div>
+
+  </section>
+
+  <script src="app.js"></script>
+
+  <script>
+    /*
+      Add OCR text to the result panel.
+
+      We wrap the original result function so the
+      OCR output can be displayed without changing
+      the recognition engine.
+    */
+
+    const originalDisplayRecognitionResult =
+      window.displayRecognitionResult;
+
+    window.displayRecognitionResult = function(result, ocr) {
+
+      originalDisplayRecognitionResult(result, ocr);
+
+      const ocrElement =
+        document.getElementById("ocrText");
+
+      if (ocrElement) {
+        ocrElement.textContent =
+          ocr.text || "No text detected";
+      }
+    };
+  </script>
+
 </body>
 </html>
