@@ -80,7 +80,17 @@
       Read Result
     </button>
   </div>
+<div>
+  <input
+    type="file"
+    id="imageUpload"
+    accept="image/*"
+  >
 
+  <button onclick="scanUploadedImage()">
+    Scan Image
+  </button>
+</div>
   <p id="scan-status">
     Initializing...
   </p>
@@ -107,7 +117,11 @@
 
       <pre id="ocrText">—</pre>
     </div>
-
+    <img
+  id="ocrPreview"
+  style="display:none; max-width:100%; margin-top:15px; border:1px solid #ccc;"
+  alt="OCR preprocessing preview"
+/>
   </section>
 
   <script src="app.js"></script>
